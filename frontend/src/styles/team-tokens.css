@@ -1,0 +1,82 @@
+/* ─── ProjectXY Team Identity Tokens ──────────────────────────────────────── */
+
+:root {
+  /* RED TEAM — Offensive Operations */
+  --team-red-primary: #FF2D20;
+  --team-red-bg: #0D0000;
+  --team-red-glow: rgba(255, 45, 32, 0.15);
+  --team-red-border: rgba(255, 45, 32, 0.3);
+  --team-red-card: rgba(255, 45, 32, 0.05);
+
+  /* BLUE TEAM — Defensive Operations */
+  --team-blue-primary: #0EA5E9;
+  --team-blue-bg: #00091A;
+  --team-blue-glow: rgba(14, 165, 233, 0.12);
+  --team-blue-border: rgba(14, 165, 233, 0.25);
+  --team-blue-card: rgba(14, 165, 233, 0.05);
+
+  /* PURPLE TEAM — Intelligence & Analysis */
+  --team-purple-primary: #A855F7;
+  --team-purple-bg: #0D0018;
+  --team-purple-glow: rgba(168, 85, 247, 0.12);
+  --team-purple-border: rgba(168, 85, 247, 0.25);
+  --team-purple-card: rgba(168, 85, 247, 0.05);
+}
+
+/* ─── Scan-line overlay for Red Team pages ─────────────────────────────────── */
+.team-red-scanlines::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(255, 45, 32, 0.015) 2px,
+    rgba(255, 45, 32, 0.015) 4px
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ─── Grid overlay for Blue Team pages ─────────────────────────────────────── */
+.team-blue-grid::after {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-image:
+    linear-gradient(rgba(14, 165, 233, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(14, 165, 233, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* ─── Hex overlay for Purple Team pages ────────────────────────────────────── */
+.team-purple-hex {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='100' viewBox='0 0 56 100'%3E%3Cpath d='M28 66L0 50V18L28 2l28 16v32L28 66z' fill='none' stroke='rgba(168%2C85%2C247%2C0.06)' stroke-width='1'/%3E%3C/svg%3E");
+}
+
+/* ─── Red team custom scrollbar ────────────────────────────────────────────── */
+.team-red-scroll::-webkit-scrollbar { width: 4px; }
+.team-red-scroll::-webkit-scrollbar-track { background: #0D0000; }
+.team-red-scroll::-webkit-scrollbar-thumb { background: rgba(255, 45, 32, 0.3); border-radius: 0; }
+.team-red-scroll:hover::-webkit-scrollbar-thumb { background: rgba(255, 45, 32, 0.6); }
+
+/* ─── Blue team custom scrollbar ───────────────────────────────────────────── */
+.team-blue-scroll::-webkit-scrollbar { width: 4px; }
+.team-blue-scroll::-webkit-scrollbar-track { background: #00091A; }
+.team-blue-scroll::-webkit-scrollbar-thumb { background: rgba(14, 165, 233, 0.25); border-radius: 0; }
+.team-blue-scroll:hover::-webkit-scrollbar-thumb { background: rgba(14, 165, 233, 0.5); }
+
+/* ─── Purple team custom scrollbar ─────────────────────────────────────────── */
+.team-purple-scroll::-webkit-scrollbar { width: 4px; }
+.team-purple-scroll::-webkit-scrollbar-track { background: #0D0018; }
+.team-purple-scroll::-webkit-scrollbar-thumb { background: rgba(168, 85, 247, 0.25); border-radius: 0; }
+.team-purple-scroll:hover::-webkit-scrollbar-thumb { background: rgba(168, 85, 247, 0.5); }

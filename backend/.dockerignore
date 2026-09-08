@@ -1,0 +1,31 @@
+# Virtual environment
+venv/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.log
+
+# Source control and editor state
+.git/
+.github/
+.idea/
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment files
+.env
+.env.*
+
+# Test artifacts
+# Build artifacts
+dist/
+build/
+*.egg-info/

@@ -1,0 +1,58 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Traefik v2 Static Configuration — ProjectXY Enterprise
+# Self-signed TLS via file provider
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Global settings
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+# API / Dashboard
+api:
+  dashboard: true
+  insecure: true   # Dashboard on :8080 (restrict to internal in prod)
+
+# Ping endpoint for health-check
+ping: {}
+
+# Entry-points
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+
+  websecure:
+    address: ":443"
+    http:
+      tls: {}
+
+# Certificate resolver — file-based (self-signed certs in ./certs/)
+tls:
+  stores:
+    default:
+      defaultCertificate:
+        certFile: /certs/server.crt
+        keyFile: /certs/server.key
+
+# Providers
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    # Let Traefik auto-detect container networks to avoid project-prefix mismatches
+  file:
+    directory: /etc/traefik/dynamic/
+    watch: true
+
+# Logging
+log:
+  level: INFO
+
+accessLog:
+  format: json

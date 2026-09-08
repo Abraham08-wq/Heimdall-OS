@@ -1,0 +1,22 @@
+# .gitignore
+node_modules/
+dist/
+build/
+.next/
+.env
+.DS_Store
+*.log
+coverage/
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+venv/
+env/
+database_data/
+backend/ .venv/
+.venv/
+.venv/
+*_data/
+.venv/
+*_data/

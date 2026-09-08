@@ -1,0 +1,1 @@
+print("Scanning local JNDI directory targets...")

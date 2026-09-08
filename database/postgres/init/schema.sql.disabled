@@ -1,0 +1,176 @@
+-- Cyber Intelligence Platform Schema
+
+-- Extensions (must run before any table creation)
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+-- 1. Identity & Access Management (IAM)
+CREATE TABLE IF NOT EXISTS tenants (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255) UNIQUE NOT NULL,
+    domain VARCHAR(255) UNIQUE,
+    subscription_tier VARCHAR(50) DEFAULT 'starter',
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS subscriptions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID REFERENCES tenants(id) UNIQUE,
+    stripe_customer_id VARCHAR(255),
+    stripe_subscription_id VARCHAR(255),
+    status VARCHAR(50),
+    current_period_end TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID REFERENCES tenants(id),
+    email VARCHAR(255) UNIQUE NOT NULL,
+    hashed_password VARCHAR(255) NOT NULL,
+    full_name VARCHAR(100),
+    is_active BOOLEAN DEFAULT TRUE,
+    role VARCHAR(50) DEFAULT 'analyst',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 2. Intelligence Entities
+CREATE TABLE IF NOT EXISTS entities (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id UUID REFERENCES tenants(id),
+    canonical_name VARCHAR(255) NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    risk_score INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_entity_name ON entities USING GIN (to_tsvector('english', canonical_name));
+
+CREATE TABLE IF NOT EXISTS attributes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    entity_id UUID REFERENCES entities(id) ON DELETE CASCADE,
+    type VARCHAR(50) NOT NULL,
+    value TEXT NOT NULL,
+    value_hash VARCHAR(64),
+    source VARCHAR(100),
+    confidence FLOAT DEFAULT 0.0,
+    last_seen TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_attr_hash ON attributes(value_hash);
+CREATE INDEX IF NOT EXISTS idx_attr_entity ON attributes(entity_id);
+
+-- 3. Investigation Reports
+CREATE TABLE IF NOT EXISTS reports (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    author_id UUID REFERENCES users(id),
+    title VARCHAR(255) NOT NULL,
+    summary TEXT,
+    content JSONB,
+    status VARCHAR(20) DEFAULT 'draft',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 4. Device Tracking & Geofencing
+CREATE TABLE IF NOT EXISTS devices (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    name VARCHAR(255),
+    type VARCHAR(50),
+    latitude FLOAT,
+    longitude FLOAT,
+    accuracy_radius FLOAT,
+    last_seen TIMESTAMPTZ DEFAULT NOW(),
+    active_trace BOOLEAN DEFAULT FALSE,
+    owner_id UUID REFERENCES users(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_name ON devices(name);
+
+CREATE TABLE IF NOT EXISTS geofences (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    device_id UUID REFERENCES devices(id),
+    center_latitude FLOAT NOT NULL,
+    center_longitude FLOAT NOT NULL,
+    radius_meters FLOAT DEFAULT 1000.0,
+    active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 5. Enterprise Seed Data
+INSERT INTO tenants (id, name, subscription_tier, is_active)
+VALUES ('00000000-0000-0000-0000-000000000001', 'ProjectXY Enterprise', 'enterprise', true)
+ON CONFLICT (id) DO NOTHING;
+
+CREATE TABLE IF NOT EXISTS system_flags (
+    key VARCHAR(100) PRIMARY KEY,
+    value TEXT,
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+INSERT INTO users (id, email, full_name, role, hashed_password, tenant_id, is_active) VALUES
+  ('10000000-0000-0000-0000-000000000001', 'admin@projectxy.io', 'System Administrator', 'admin', '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW', '00000000-0000-0000-0000-000000000001', true),
+  ('10000000-0000-0000-0000-000000000002', 'red@projectxy.io', 'Red Team Operator', 'red_operator', '$2b$12$EixZaYVK1fsbw1ZfbX3OXePaWxn96p36WQoeG6Lruj3vjPGga31lW', '00000000-0000-0000-0000-000000000001', true)
+ON CONFLICT (email) DO NOTHING;
+
+-- 6. Cognitive Shield & Compliance
+CREATE TABLE IF NOT EXISTS semantic_logs (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    entity_id TEXT NOT NULL DEFAULT 'anonymous',
+    session_id TEXT,
+    embedding vector(384),
+    threat_score FLOAT4 DEFAULT 0.0,
+    action TEXT DEFAULT 'PASS',
+    prompt_hash TEXT,
+    transformations_applied JSONB DEFAULT '[]',
+    intent_classification TEXT,
+    multi_stage_flag BOOLEAN DEFAULT FALSE,
+    attack_pattern TEXT,
+    layer1_score FLOAT4 DEFAULT 0.0,
+    layer3_score FLOAT4 DEFAULT 0.0
+);
+
+CREATE TABLE IF NOT EXISTS threat_vectors (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    category VARCHAR(100) NOT NULL,
+    description TEXT,
+    embedding vector(384) NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    severity FLOAT4 DEFAULT 0.8,
+    source VARCHAR(100) DEFAULT 'curated',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS audit_logs (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    actor_id TEXT NOT NULL DEFAULT 'system',
+    action TEXT NOT NULL,
+    resource_type TEXT,
+    resource_id TEXT,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    hash TEXT,
+    previous_hash TEXT,
+    metadata JSONB DEFAULT '{}'
+);
+
+CREATE TABLE IF NOT EXISTS missions (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    target TEXT NOT NULL,
+    status VARCHAR(50) DEFAULT 'PENDING'
+);
+
+CREATE TABLE IF NOT EXISTS siem_alerts (
+    id UUID DEFAULT gen_random_uuid() PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    severity VARCHAR(20) NOT NULL DEFAULT 'LOW',
+    alert_type VARCHAR(100),
+    title TEXT,
+    resolved BOOLEAN DEFAULT FALSE
+);

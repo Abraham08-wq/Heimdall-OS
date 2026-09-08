@@ -1,0 +1,119 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    restart: unless-stopped
+    env_file: .env.local
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: projectxy
+    volumes:
+      - database_data:/var/lib/postgresql/data
+      - ./database/postgres/init:/docker-entrypoint-initdb.d:ro
+    networks:
+      - projectxy-net
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres", "-d", "projectxy"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+    mem_limit: 768m
+    cpus: "0.75"
+
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    env_file: .env.local
+    command: >
+      redis-server
+      --appendonly no
+      --save ""
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks:
+      - projectxy-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    mem_limit: 192m
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env.local
+    environment:
+      PYTHONPATH: /app
+      ENVIRONMENT: development
+      AUTH_BYPASS_ENABLED: "false"
+      ENABLE_GRAPH_DB: "true"
+      ENABLE_KAFKA: "true"
+      ENABLE_FIREWALL: "false"
+      AUTO_APPLY_MIGRATIONS: "true"
+      LOG_LEVEL: INFO
+      LEDGER_SIGNING_KEY: "190ac7ea180e5693f873a74ac0b0a8f025db9d6d77d6b424e859b3cf694df6fd"
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./backend:/app
+    group_add:
+      - 972
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD-SHELL", "timeout 1 bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/8000' || exit 1" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      - projectxy-net
+    ports:
+      - "8000:8000"
+    mem_limit: 512m
+    cpus: "0.75"
+
+
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        BACKEND_URL: http://backend:8000
+    restart: unless-stopped
+    env_file: .env.local
+    environment:
+      BACKEND_URL: http://backend:8000
+      NEXT_PUBLIC_API_URL: ""
+      NEXT_PUBLIC_DEV_MODE: "false"
+      NEXT_PUBLIC_FAST_LOGIN: "false"
+      NODE_ENV: production
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - projectxy-net
+    ports:
+      - "3000:3000"
+    mem_limit: 512m
+    cpus: "0.75"
+
+volumes:
+  database_data:
+  redis_data:
+
+networks:
+  projectxy-net:
+    name: projectxy-lite-net
+    driver: bridge

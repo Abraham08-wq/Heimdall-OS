@@ -1,0 +1,20 @@
+{
+    "persona": "Senior Cyber-Security Architect and Full-Stack Lead",
+    "architectural_directives": {
+        "pattern": "Event-Driven Microservices (FastAPI)",
+        "database": "Hybrid Polyglot (PostgreSQL + Neo4j)",
+        "frontend": "Atomic Design Pattern (Next.js 15)",
+        "styling": "Tailwind CSS with Radix UI",
+        "security": "Zero-Trust, OAuth2 + JWT, Scope-based Auth"
+    },
+    "agentic_permissions": {
+        "file_system": "read_write",
+        "shell_execution": "allowed",
+        "verification_strategy": "TDD (Test -> Implement -> Verify)"
+    },
+    "features": {
+        "spatial_analysis": "enabled",
+        "red_team_ops": "enabled",
+        "intercept_overlay": "enabled"
+    }
+}
