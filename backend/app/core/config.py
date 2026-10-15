@@ -3,16 +3,17 @@ from typing import List, Union
 from pydantic import AnyHttpUrl, AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Cyber Intelligence Platform"
     API_V1_STR: str = "/api/v1"
     FRONTEND_URL: AnyHttpUrl = Field(...)
-    
+
     # SECURITY
     JWT_SECRET_KEY: str = Field(validation_alias=AliasChoices("JWT_SECRET_KEY", "SECRET_KEY"))
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     ALGORITHM: str = "HS256"
-    
+
     DEVELOPMENT_MODE: bool = False
     AUTH_BYPASS_ENABLED: bool = False
     ENABLE_GRAPH_DB: bool = True
@@ -57,6 +58,14 @@ class Settings(BaseSettings):
     ALIENVAULT_API_KEY: str | None = None
     LEAK_LOOKUP_API_KEY: str | None = None
 
+    # IMMUTABLE LEDGER (WORM) — signing key for worm_ledger.py's
+    # WormLedgerService. Generate via pqc_engine.generate_lattice_keypair()
+    # and store the PRIVATE key PEM here. The matching public key is kept
+    # separately for verification purposes, not needed by the signing
+    # service itself, but useful if anything later checks a signature.
+    LEDGER_SIGNING_PRIVATE_KEY_PEM: str | None = None
+    LEDGER_VERIFICATION_PUBLIC_KEY_PEM: str | None = None
+
     model_config = SettingsConfigDict(
         case_sensitive=True,
         # Primary env file is .env.local (project standard).
@@ -91,5 +100,6 @@ class Settings(BaseSettings):
     @property
     def SQLALCHEMY_DATABASE_URI(self) -> str:
         return self.DATABASE_URL
+
 
 settings = Settings()

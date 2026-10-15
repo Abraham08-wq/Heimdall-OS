@@ -11,6 +11,11 @@ class MissionPhase(str, Enum):
     PERSIST = "PERSIST"   # Phase IV
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    # ADDED: mission_router.py's abort_mission() checks for this value (and
+    # sets it, via unified_chain.py's new abort_mission() method below), but it
+    # never existed as a valid phase — every abort attempt would have compared
+    # against a value the enum couldn't actually reach.
+    ABORTED = "ABORTED"
 
 class ExecutionStrategy(str, Enum):
     THROTTLE = "ADAPTIVE_THROTTLING"
@@ -54,7 +59,23 @@ class Mission(BaseModel):
     tenant_id: str
     target_entity: str
     phase: MissionPhase = Field(default=MissionPhase.RECON)
-    
+
+    # ADDED: MissionLaunchRequest (mission_router.py) already accepts and passes
+    # `mode` and `priority` from the frontend, and escalate_mission() updates
+    # priority -- but neither field previously existed on Mission itself, so
+    # initiate_mission() couldn't accept or store them (a TypeError on every
+    # single /missions/launch call, since the router always passes them).
+    mode: str = Field(default="full")            # full | recon | stealth
+    priority: str = Field(default="MEDIUM")      # LOW | MEDIUM | HIGH | CRITICAL
+
+    # ADDED: the actual Red Team Ops UI (frontend/src/app/redteam/page.tsx)
+    # lets the operator type a free-text objective and pick MITRE ATT&CK
+    # techniques, and sends both in the launch request body -- but neither
+    # field existed here, so Pydantic silently discarded them on every launch
+    # (no error, just quietly lost operator input).
+    objective: Optional[str] = None
+    techniques: List[str] = Field(default_factory=list)
+
     # Context accumulated through the pipeline
     recon_data: Dict[str, Any] = Field(default_factory=dict)
     analysis_findings: Dossier = Field(default_factory=Dossier)

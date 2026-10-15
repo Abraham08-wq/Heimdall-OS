@@ -3,18 +3,36 @@ devices.py — Device CRUD endpoint.
 
 Devices are separated by type (Server, Workstation, Network, IoT, Mobile, OT/ICS, Cloud).
 All mutations are reflected in both PostgreSQL and the Neo4j graph for unified telemetry.
+
+ADDED: organization support, enrollment-token issuance for the sensor agent
+(see app/routers/sensor_router.py for the agent's own side of that flow), and
+the human-triggered command queue that BlueSOC's action buttons (Isolate,
+etc.) write to. Everything below in this docstring's original scope is
+unchanged from before; new endpoints are clearly marked "ADDED".
 """
+import json
+import secrets
+from datetime import datetime, timedelta, timezone
 from typing import Any, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from uuid import UUID
 
 from app.api import deps
-from app.models.models import Device
+from app.models.models import Device, Organization, DeviceCommand
 from app.schemas import device as device_schema
+from app.schemas import agent_schema
 from app.infrastructure.graph import graph_db  # ← top-level import (prevents NameError)
+from app.infrastructure.cache.redis_manager import redis_cache
 
 router = APIRouter()
+
+# ADDED: a second router for Organizations, included separately in api.py at
+# its own prefix -- kept in this file since it's the same human-authenticated
+# device-management surface, not a new module.
+organizations_router = APIRouter()
+
+ENROLLMENT_TOKEN_TTL_SECONDS = 24 * 3600
 
 
 # ── List / Filter ──────────────────────────────────────────────────────────────
@@ -30,6 +48,7 @@ def read_devices(
     risk_min: Optional[int] = None,   # ?risk_min=80
     department: Optional[str] = None, # ?department=Finance
     tag: Optional[str] = None,        # ?tag=critical (JSONB contains check)
+    organization_id: Optional[UUID] = None,  # ADDED: ?organization_id=... to scope to one client org
 ) -> Any:
     """
     List devices with optional filters.  Devices are separated by type for clean
@@ -41,6 +60,7 @@ def read_devices(
         risk_min    — return only devices with risk_score >= risk_min
         department  — filter by owning department
         tag         — return devices that carry this tag in their JSONB tags array
+        organization_id — ADDED: return only devices belonging to this organization
     """
     q = db.query(Device)
 
@@ -55,6 +75,8 @@ def read_devices(
     if tag:
         # PostgreSQL JSONB contains operator
         q = q.filter(Device.tags.contains([tag]))
+    if organization_id is not None:
+        q = q.filter(Device.organization_id == organization_id)
 
     devices = q.order_by(Device.last_seen.desc()).offset(skip).limit(limit).all()
     return devices
@@ -230,3 +252,162 @@ def delete_device(
         raise HTTPException(status_code=404, detail="Device not found")
     db.delete(device)
     db.commit()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADDED — Sensor agent enrollment tokens (human-authenticated side)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/enrollment-tokens", response_model=agent_schema.EnrollmentTokenResponse)
+async def create_enrollment_token(
+    *,
+    request: agent_schema.EnrollmentTokenRequest,
+    current_user=Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Issue a one-time enrollment token to hand to whoever is installing the
+    sensor agent on a device or in a client's server room -- AFTER the legal
+    monitoring agreement is in place. The token is single-use and expires in
+    24h if never redeemed.
+
+    Admin/operator only, matching the same permission bar as deleting a device.
+    """
+    if current_user.role not in ("admin", "operator"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    token = secrets.token_urlsafe(24)
+    payload = {
+        # Attach the enrolling device to the issuing operator's own tenant, so
+        # it belongs to the right client org and shows up under their scope.
+        "tenant_id": str(current_user.tenant_id) if getattr(current_user, "tenant_id", None) else None,
+        "organization_id": str(request.organization_id) if request.organization_id else None,
+        "deployment_mode": request.deployment_mode,
+        "device_name_hint": request.device_name_hint,
+    }
+    key = f"sensor:enrollment:{token}"
+    # redis_cache.redis_client is redis.asyncio — the write must be awaited, or
+    # the token is never actually stored (and enrollment later fails).
+    await redis_cache.redis_client.setex(key, ENROLLMENT_TOKEN_TTL_SECONDS, json.dumps(payload))
+
+    return agent_schema.EnrollmentTokenResponse(
+        enrollment_token=token,
+        expires_at=datetime.now(timezone.utc) + timedelta(seconds=ENROLLMENT_TOKEN_TTL_SECONDS),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADDED — Command queue (BlueSOC action buttons write here; the agent, via
+# sensor_router.py, is the only thing that ever reads/executes from it)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@router.post("/{device_id}/command", response_model=agent_schema.DeviceCommandOut)
+def queue_device_command(
+    *,
+    db: Session = Depends(deps.get_db),
+    device_id: UUID,
+    request: agent_schema.QueueCommandRequest,
+    current_user=Depends(deps.get_current_active_user),
+) -> Any:
+    """
+    Queue a command for the device's sensor agent to execute on its next
+    heartbeat. This is the ONLY way a command reaches a device -- the agent
+    never acts without a human having clicked something that calls this.
+
+    Admin/operator only: this is the same trust boundary as isolating or
+    deleting a device, since 'isolate' is exactly the kind of action this
+    queues.
+    """
+    if current_user.role not in ("admin", "operator"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+
+    device = db.query(Device).filter(Device.id == device_id).first()
+    if not device:
+        raise HTTPException(status_code=404, detail="Device not found")
+    if not device.agent_secret_hash:
+        raise HTTPException(
+            status_code=409,
+            detail="This device has no sensor agent enrolled -- there is nothing to deliver this command to.",
+        )
+
+    command = DeviceCommand(
+        device_id=device_id,
+        action=request.action,
+        params=request.params,
+        status="pending",
+        issued_by=getattr(current_user, "id", None),
+    )
+    db.add(command)
+    db.commit()
+    db.refresh(command)
+    return command
+
+
+@router.get("/{device_id}/commands", response_model=List[agent_schema.DeviceCommandOut])
+def list_device_commands(
+    *,
+    db: Session = Depends(deps.get_db),
+    device_id: UUID,
+    current_user=Depends(deps.get_current_active_user),
+    limit: int = 50,
+) -> Any:
+    """Command history for a device -- what was ever queued, delivered, and its result."""
+    commands = (
+        db.query(DeviceCommand)
+        .filter(DeviceCommand.device_id == device_id)
+        .order_by(DeviceCommand.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return commands
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ADDED — Organizations (separate router; include at its own prefix in api.py)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@organizations_router.get("/", response_model=List[agent_schema.Organization])
+def list_organizations(
+    db: Session = Depends(deps.get_db),
+    current_user=Depends(deps.get_current_active_user),
+) -> Any:
+    orgs = db.query(Organization).order_by(Organization.name.asc()).all()
+    # device_count is computed here, not stored, so it's never stale.
+    out = []
+    for org in orgs:
+        count = db.query(Device).filter(Device.organization_id == org.id).count()
+        item = agent_schema.Organization.model_validate(org)
+        item.device_count = count
+        out.append(item)
+    return out
+
+
+@organizations_router.post("/", response_model=agent_schema.Organization)
+def create_organization(
+    *,
+    db: Session = Depends(deps.get_db),
+    org_in: agent_schema.OrganizationCreate,
+    current_user=Depends(deps.get_current_active_user),
+) -> Any:
+    if current_user.role not in ("admin", "operator"):
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    org = Organization(**org_in.model_dump())
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+    return org
+
+
+@organizations_router.get("/{organization_id}", response_model=agent_schema.Organization)
+def read_organization(
+    *,
+    db: Session = Depends(deps.get_db),
+    organization_id: UUID,
+    current_user=Depends(deps.get_current_active_user),
+) -> Any:
+    org = db.query(Organization).filter(Organization.id == organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    count = db.query(Device).filter(Device.organization_id == organization_id).count()
+    item = agent_schema.Organization.model_validate(org)
+    item.device_count = count
+    return item

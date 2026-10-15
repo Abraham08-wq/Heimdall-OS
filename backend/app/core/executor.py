@@ -19,6 +19,7 @@ Integration:
 
 import asyncio
 import json
+import os
 import uuid
 import docker
 import logging
@@ -44,6 +45,25 @@ try:
     from app.core.ledger import ledger
 except ImportError:
     ledger = None
+
+
+# FIXED: was a literal absolute path — "/home/ibraah/Desktop/ProjectXY/backend/tmp" — hardcoded into the
+# source, which only ever resolved correctly on one specific machine at one specific clone location. Docker
+# bind mounts are always resolved by the DAEMON against the HOST filesystem, regardless of which container is
+# asking for them — so this container needs to be told what its own project root looks like from the host's
+# point of view. HOST_PROJECT_ROOT is set in docker-compose.yml as ${PWD} (the directory `docker compose` was
+# run from), which is exactly that path. If it's ever unset (e.g. running this module outside Docker), we fail
+# loudly rather than silently building a wrong, possibly-someone-else's-home-directory path.
+def _host_tmp_dir() -> str:
+    root = os.environ.get("HOST_PROJECT_ROOT")
+    if not root:
+        raise RuntimeError(
+            "HOST_PROJECT_ROOT is not set. This must be provided by docker-compose.yml (e.g. "
+            "HOST_PROJECT_ROOT: ${PWD}) so the executor can tell the Docker daemon the correct HOST path "
+            "for the sandbox's bind mount — a container-internal path (like /app/tmp) is meaningless to the "
+            "daemon, which always resolves bind-mount sources against the host filesystem."
+        )
+    return f"{root.rstrip('/')}/backend/tmp"
 
 
 # ─── Enums ────────────────────────────────────────────────────────────────────
@@ -207,29 +227,42 @@ class Executor:
         # Create a temporary file path inside the shared application scope
         container_script_path = f"/app/tmp/{script_id}.py"
 
+        # FIXED: write the script BEFORE starting the sibling container, not after. The original order
+        # started the container (which immediately tries to `python /app/tmp/{id}.py`) and only wrote the
+        # file afterward — a race the sibling container could easily lose, on top of the host-mount mismatch
+        # fixed below.
+        os.makedirs("tmp", exist_ok=True)
+        with open(f"tmp/{script_id}.py", "w") as f:
+            f.write(code)
+
         try:
             # Spin up a lightweight Python container sandbox
             container = self.client.containers.run(
                 "python:3.11-slim",
                 command=f"python {container_script_path}",
-                # FIX: Explicitly point the host mount to your laptop's project folder tree structure
-                volumes={"/home/ibraah/Desktop/ProjectXY/backend/tmp": {"bind": "/app/tmp", "mode": "rw"}},
+                # FIXED: was a hardcoded absolute path that only existed on one developer's machine
+                # (see _host_tmp_dir() above). This also now matches a real bind mount on the BACKEND
+                # service itself (docker-compose.yml: `- ./backend/tmp:/app/tmp` on the `backend` service),
+                # so a file this process writes to its own `tmp/` directory is actually visible at that host
+                # path, and therefore actually visible to this sibling container too. Without that backend-side
+                # mount, the file written above never reaches the host, and the sibling container's `python
+                # /app/tmp/{id}.py` would always fail with "No such file or directory".
+                volumes={_host_tmp_dir(): {"bind": "/app/tmp", "mode": "rw"}},
                 detach=True,
                 remove=False,
                 mem_limit=f"{config.memory_mb}m",
                 memswap_limit=f"{config.memory_mb}m",
                 cpu_quota=int(config.cpu_quota * 100000),
                 network_disabled=config.network_disabled,
-                user="root",
+                # FIXED: was hardcoded to "root" regardless of `config.user` (which defaults to "nobody").
+                # Submitted code was always executed as root inside the sandbox container, silently ignoring
+                # the privilege-drop this config field exists to provide.
+                user=config.user,
                 working_dir="/app"
             )
 
             self.running_containers[execution_id] = container.id
             logger.info(f"📦 Container started: {container.id[:12]}")
-
-            # FIX: Write the target code snippet straight to your newly configured location
-            with open(f"tmp/{script_id}.py", "w") as f:
-                f.write(code)
 
             # Monitor execution with timeout
             start_time = datetime.utcnow()
@@ -310,7 +343,7 @@ class Executor:
         except Exception as e:
             logger.error(f"❌ Execution failed: {e}")
 
-            # FIX: Fallback if start_time was never initialized before crashing
+            # Fallback if start_time was never initialized before crashing
             if 'start_time' not in locals():
                 start_time = datetime.utcnow()
 

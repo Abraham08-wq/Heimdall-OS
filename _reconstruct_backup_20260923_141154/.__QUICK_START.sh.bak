@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# One-command setup helper. Always forces the lite profile, regardless of
+# host RAM — for first-time setup, demos, and CI. For the full stack, use
+# start_full_services.sh or PROJECTXY_COMPOSE_FILE=docker-compose.yml ./start_services.sh
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+echo "[QUICK_START] Setting up ProjectXY (lite profile)..."
+
+if [ ! -f .env.local ]; then
+  if [ ! -f .env.template ]; then
+    echo "[QUICK_START] Neither .env.local nor .env.template exists. Cannot continue." >&2
+    exit 1
+  fi
+  cp .env.template .env.local
+  echo "[QUICK_START] Created .env.local from .env.template."
+  echo "[QUICK_START] IMPORTANT: edit .env.local now and replace every REPLACE_ME value"
+  echo "[QUICK_START] with a real secret before continuing (Ctrl+C to stop and edit)."
+  sleep 5
+fi
+
+chmod +x start_lite_services.sh 2>/dev/null || true
+./start_lite_services.sh
+
+cat <<'EOF'
+
+[QUICK_START] Done. Next:
+  1. Wait for containers to report healthy: docker compose -f docker-compose.lite.yml ps
+  2. Run migrations:  docker compose -f docker-compose.lite.yml exec backend alembic upgrade head
+  3. Seed data:       docker compose -f docker-compose.lite.yml exec backend python scripts/seed.py
+  4. Create admin:    docker compose -f docker-compose.lite.yml exec backend python scripts/seed_admin.py
+  5. Open:            http://localhost:3000
+EOF

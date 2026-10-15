@@ -29,6 +29,7 @@ import {
 import { clsx } from 'clsx';
 import { useAuth } from '@/components/providers/AuthProvider';
 import { CommandPalette } from '@/components/ui/CommandPalette';
+import { BackendStatus } from '@/components/Layout/BackendStatus';
 
 type NavItem = {
     label: string;
@@ -47,13 +48,13 @@ type NavGroup = {
 const NAV_GROUPS: NavGroup[] = [
     {
         label: 'Intelligence',
-        accent: 'from-cyan-400/20 to-sky-500/10 border-cyan-400/20',
+        accent: 'from-amber-400/20 to-orange-500/10 border-amber-400/20',
         icon: Activity,
         items: [
             {
-                label: 'Situation Room',
-                href: '/',
-                description: 'Live executive overview',
+                label: 'Dashboard',
+                href: '/dashboard',
+                description: 'Live posture, feed & device inventory',
                 icon: LayoutDashboard,
             },
             {
@@ -127,15 +128,9 @@ const NAV_GROUPS: NavGroup[] = [
     },
     {
         label: 'Infrastructure',
-        accent: 'from-indigo-500/20 to-slate-500/10 border-indigo-400/20',
+        accent: 'from-orange-500/20 to-amber-500/10 border-orange-400/20',
         icon: Layers3,
         items: [
-            {
-                label: 'Infrastructure Grid',
-                href: '/dashboard',
-                description: 'System runtime and node status',
-                icon: Layers3,
-            },
             {
                 label: 'Device Registry',
                 href: '/devices',
@@ -152,7 +147,7 @@ const NAV_GROUPS: NavGroup[] = [
     },
     {
         label: 'Defensive',
-        accent: 'from-emerald-400/20 to-teal-500/10 border-emerald-400/20',
+        accent: 'from-amber-400/20 to-yellow-500/10 border-amber-400/20',
         icon: ShieldCheck,
         items: [
             {
@@ -191,7 +186,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
     const { user, logout, isLoading } = useAuth();
     const [openGroup, setOpenGroup] = useState(getActiveGroup(pathname));
-    const isAuthRoute = pathname.startsWith('/login');
+    const isAuthRoute = pathname.startsWith('/login') || pathname.startsWith('/agent');
 
     useEffect(() => {
         setOpenGroup(getActiveGroup(pathname));
@@ -205,7 +200,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             }
         }
 
-        return 'Situation Room';
+        return 'Dashboard';
     }, [pathname]);
 
     if (isAuthRoute) {
@@ -213,16 +208,16 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     }
 
     return (
-        <div className="min-h-screen bg-slate-950 text-slate-100 selection:bg-teal-400/30 selection:text-white">
-            <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top,_rgba(20,184,166,0.12),_transparent_35%),linear-gradient(180deg,_rgba(15,23,42,0.92),_rgba(2,6,23,1))]" />
+        <div className="min-h-screen bg-slate-950 text-slate-100 selection:bg-amber-400/30 selection:text-white">
+            <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(circle_at_top,_rgba(245,158,11,0.12),_transparent_35%),linear-gradient(180deg,_rgba(15,23,42,0.92),_rgba(2,6,23,1))]" />
             <div className="relative flex min-h-screen">
                 <aside className="fixed left-0 top-0 z-40 hidden h-screen w-80 flex-col border-r border-white/10 bg-white/5 backdrop-blur-md lg:flex">
                     <div className="flex items-center gap-3 border-b border-white/10 px-5 py-5">
-                        <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-400 to-indigo-500 text-sm font-black text-slate-950 shadow-[0_0_24px_rgba(45,212,191,0.35)]">
-                            XY
+                        <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-amber-400 to-orange-600 text-sm font-black text-slate-950 shadow-[0_0_24px_rgba(245,158,11,0.4)]">
+                            HO
                         </div>
                         <div>
-                            <p className="text-[11px] font-semibold uppercase tracking-[0.34em] text-slate-200">ProjectXY</p>
+                            <p className="text-[11px] font-semibold uppercase tracking-[0.34em] text-slate-200">heimdall-os</p>
                             <p className="text-[10px] uppercase tracking-[0.25em] text-slate-400">Tactical Intelligence Interface</p>
                         </div>
                     </div>
@@ -279,11 +274,11 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                                                                 className={clsx(
                                                                     'flex items-start gap-3 rounded-xl border px-3 py-3 transition-all',
                                                                     isActive
-                                                                        ? 'border-teal-400/40 bg-teal-400/10 shadow-[0_0_24px_rgba(45,212,191,0.12)]'
+                                                                        ? 'border-amber-400/40 bg-amber-400/10 shadow-[0_0_24px_rgba(245,158,11,0.15)]'
                                                                         : 'border-transparent text-slate-300 hover:border-white/10 hover:bg-white/5'
                                                                 )}
                                                             >
-                                                                <span className={clsx('mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg', isActive ? 'bg-teal-400/20 text-teal-300' : 'bg-white/5 text-slate-300')}>
+                                                                <span className={clsx('mt-0.5 flex h-8 w-8 items-center justify-center rounded-lg', isActive ? 'bg-amber-400/20 text-amber-300' : 'bg-white/5 text-slate-300')}>
                                                                     <ItemIcon size={16} />
                                                                 </span>
                                                                 <span className="min-w-0 flex-1">
@@ -308,7 +303,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                                 <p className="text-[10px] uppercase tracking-[0.32em] text-slate-500">Session</p>
                                 <p className="truncate text-sm font-medium text-white">{isLoading ? 'Verifying operator...' : user?.email ?? 'Unauthenticated'}</p>
                             </div>
-                            <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.28em] text-teal-300">
+                            <div className="flex items-center gap-2 text-[10px] uppercase tracking-[0.28em] text-amber-300">
                                 <span className="h-2 w-2 rounded-full bg-emerald-400 shadow-[0_0_12px_rgba(74,222,128,0.7)]" />
                                 Live
                             </div>
@@ -316,7 +311,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                         <button
                             type="button"
                             onClick={() => void logout()}
-                            className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-slate-900/60 px-4 py-3 text-sm font-medium text-slate-200 transition hover:border-teal-400/40 hover:bg-teal-400/10"
+                            className="mt-3 flex w-full items-center justify-center gap-2 rounded-2xl border border-white/10 bg-slate-900/60 px-4 py-3 text-sm font-medium text-slate-200 transition hover:border-amber-400/40 hover:bg-amber-400/10"
                         >
                             <LogOut size={16} />
                             Logout
@@ -331,7 +326,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                                 <button
                                     type="button"
                                     onClick={() => window.dispatchEvent(new Event('projectxy:open-command-palette'))}
-                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-teal-400/40 hover:bg-teal-400/10"
+                                    className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs font-medium text-slate-200 transition hover:border-amber-400/40 hover:bg-amber-400/10"
                                 >
                                     <Command size={14} />
                                     Cmd+K
@@ -343,6 +338,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                             </div>
 
                             <div className="flex items-center gap-3">
+                                <BackendStatus />
                                 <div className="hidden rounded-full border border-white/10 bg-white/5 px-3 py-2 text-xs text-slate-300 sm:block">
                                     Spring-driven UI · React Query caching
                                 </div>

@@ -1,38 +1,33 @@
-# ─────────────────────────────────────────────────────────────────────────────
-# Traefik v2 Static Configuration — ProjectXY Enterprise
-# Self-signed TLS via file provider
-# ─────────────────────────────────────────────────────────────────────────────
+# ==============================================================================
+# Project Heimdall — Sovereign Cyber Intelligence Platform Proxy Surface
+# Core System Gateway Traefik Orchestration Configuration [traefik.yml]
+# ==============================================================================
 
-# Global settings
+# ── GLOBAL RUNTIME CONSTRAINTS ────────────────────────────────────────────────
 global:
   checkNewVersion: false
   sendAnonymousUsage: false
 
-# API / Dashboard
+# ── MONITORING & MANAGEMENT API SURFACE ───────────────────────────────────────
 api:
   dashboard: true
-  insecure: true   # Dashboard on :8080 (restrict to internal in prod)
+  insecure: true   # Platform Dashboard active on port :8080 for internal analytics
 
-# Ping endpoint for health-check
+# ── LIFECYCLE MONITORING ──────────────────────────────────────────────────────
 ping: {}
 
-# Entry-points
+# ── ENCLAVE INGRESS ENTRYPOINTS ───────────────────────────────────────────────
 entryPoints:
   web:
     address: ":80"
-    http:
-      redirections:
-        entryPoint:
-          to: websecure
-          scheme: https
-          permanent: true
+    # Local HTTPS redirection removed to prevent development token verification loops
 
   websecure:
     address: ":443"
     http:
       tls: {}
 
-# Certificate resolver — file-based (self-signed certs in ./certs/)
+# ── CERTIFICATE RESOLVER STORAGE MATRIX ───────────────────────────────────────
 tls:
   stores:
     default:
@@ -40,17 +35,17 @@ tls:
         certFile: /certs/server.crt
         keyFile: /certs/server.key
 
-# Providers
+# ── CONTAINER NETWORKING PROVIDERS ────────────────────────────────────────────
 providers:
   docker:
     endpoint: "unix:///var/run/docker.sock"
     exposedByDefault: false
-    # Let Traefik auto-detect container networks to avoid project-prefix mismatches
+    # 💡 FIXED: version constraints are dropped from file to comply with Traefik v3 rules.
   file:
     directory: /etc/traefik/dynamic/
     watch: true
 
-# Logging
+# ── OPERATIONS TELEMETRY LOGGING ──────────────────────────────────────────────
 log:
   level: INFO
 

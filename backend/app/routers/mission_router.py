@@ -27,6 +27,13 @@ class MissionLaunchRequest(BaseModel):
     mode: str = "full"           # full | recon | stealth
     priority: str = "MEDIUM"     # LOW | MEDIUM | HIGH | CRITICAL
     notify_on_complete: bool = True
+    # ADDED: the Red Team Ops UI (frontend/src/app/redteam/page.tsx) sends
+    # these two fields on every launch -- without declaring them here,
+    # Pydantic silently dropped the operator's typed objective and selected
+    # MITRE techniques instead of raising an error, so they never reached
+    # the mission at all.
+    objective: Optional[str] = None
+    techniques: List[str] = []
 
 
 class EscalateRequest(BaseModel):
@@ -63,6 +70,8 @@ async def launch_unified_mission(
         tenant_id=tenant_id,
         mode=request.mode,
         priority=request.priority,
+        objective=request.objective,
+        techniques=request.techniques,
         background_tasks=background_tasks,
     )
 
@@ -87,7 +96,12 @@ async def list_missions(
         all_missions = [m for m in all_missions if m.tenant_id == tenant_id]
 
     if status_filter:
-        all_missions = [m for m in all_missions if m.status == status_filter.upper()]
+        # FIXED: was `m.status` -- Mission has no `status` field, only `phase`
+        # (a MissionPhase enum). Since MissionPhase subclasses str, comparing
+        # a phase directly against the uppercased filter string still works
+        # exactly as intended (e.g. mission.phase == "COMPLETED" is True for
+        # a mission whose phase is MissionPhase.COMPLETED).
+        all_missions = [m for m in all_missions if m.phase == status_filter.upper()]
 
     return sorted(all_missions, key=lambda m: m.created_at, reverse=True)[:50]
 
@@ -126,10 +140,14 @@ async def abort_mission(
     if not mission:
         raise HTTPException(status_code=404, detail="Mission not found.")
 
-    if mission.status in {"COMPLETED", "ABORTED", "FAILED"}:
+    # FIXED: was `mission.status` -- see the note in list_missions() above.
+    # This check ran unconditionally on every abort request, so it always
+    # raised AttributeError (a 500) before the fix, regardless of the
+    # mission's actual state.
+    if mission.phase in {"COMPLETED", "ABORTED", "FAILED"}:
         raise HTTPException(
             status_code=409,
-            detail=f"Cannot abort mission in status: {mission.status}"
+            detail=f"Cannot abort mission in status: {mission.phase}"
         )
 
     try:
@@ -196,7 +214,10 @@ async def get_mission_timeline(
         timeline = await correlation_engine.reconstruct_attack_timeline(mission_id)
         return {
             "mission_id":    mission_id,
-            "target":        mission.target,
+            # FIXED: was `mission.target` -- Mission's field is `target_entity`,
+            # not `target`. This would have raised AttributeError (a 500) on
+            # every single call to GET /missions/{id}/timeline.
+            "target":        mission.target_entity,
             "kill_chain":    timeline,
             "phases_active": timeline.get("phases_seen", []),
         }

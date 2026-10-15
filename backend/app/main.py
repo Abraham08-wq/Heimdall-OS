@@ -24,12 +24,13 @@ from app.modules.firewall.semantic_logger import semantic_logger
 from app.infrastructure.kafka import kafka_streamer
 from app.infrastructure.graph import graph_db
 
+
 # ── LIFESPAN: SYSTEM INITIALIZATION ──────────────────────────────────────────
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
     log.info("System Initializing Sovereign Defense Matrix...")
-    
+
     # Infrastructure Connection
     if settings.ENABLE_GRAPH_DB:
         await graph_db.connect()
@@ -66,7 +67,7 @@ async def lifespan(app: FastAPI):
         log.info("[FIREWALL] Startup skipped (ENABLE_FIREWALL=false).")
 
     yield
-    
+
     # Graceful Shutdown
     log.info("System Shutting Down...")
     for t in tasks: t.cancel()
@@ -77,6 +78,7 @@ async def lifespan(app: FastAPI):
     if settings.ENABLE_FIREWALL:
         await shutdown_firewall()
     await semantic_logger.stop()
+
 
 # ── APP INITIALIZATION ───────────────────────────────────────────────────────
 app = FastAPI(
@@ -96,7 +98,12 @@ allowed_origins = [
     "https://localhost",
     "https://localhost:443",
 ]
-
+# FIXED: settings.BACKEND_CORS_ORIGINS (populated from .env.local's
+# BACKEND_CORS_ORIGINS) was parsed by pydantic but never consulted anywhere in
+# this file. Merged in here so that setting is finally meaningful.
+allowed_origins = list(dict.fromkeys(
+    allowed_origins + [str(o) for o in settings.BACKEND_CORS_ORIGINS]
+))
 
 app.add_middleware(SecurityHeadersMiddleware)
 
@@ -104,9 +111,15 @@ app.add_middleware(SecurityHeadersMiddleware)
 # ── SECURITY MIDDLEWARE: SOVEREIGN DEFENSE MATRIX ───────────────────────────
 @app.middleware("http")
 async def sovereign_defense_middleware(request: Request, call_next):
-    # Determine the origin making the request
-    origin = request.headers.get("origin", "http://localhost:3000")
-    
+    # FIXED: was `origin = request.headers.get("origin", "http://localhost:3000")`,
+    # then reflected back on every response with Access-Control-Allow-Credentials:
+    # true regardless of what it was — meaning literally any origin on the
+    # internet could make credentialed requests to this API. Now only an origin
+    # actually present in allowed_origins is ever reflected; anything else gets
+    # a non-matching Access-Control-Allow-Origin, which browsers reject.
+    request_origin = request.headers.get("origin", "")
+    origin = request_origin if request_origin in allowed_origins else allowed_origins[0]
+
     # Bypass for Health checks
     if request.url.path in ["/health", "/"]:
         return await call_next(request)
@@ -128,10 +141,10 @@ async def sovereign_defense_middleware(request: Request, call_next):
     if (request.url.path.startswith("/api/v1/agent")) and request.method in ["POST"]:
         body_bytes = await request.body()
         request._receive = lambda: {"type": "http.request", "body": body_bytes}
-        
+
         if body_bytes and b"override system prompts" in body_bytes.lower():
             return JSONResponse(
-                status_code=403, 
+                status_code=403,
                 content={"detail": "Payload Blocked by AI Guardrail"},
                 headers={
                     "Access-Control-Allow-Origin": origin,
@@ -140,14 +153,16 @@ async def sovereign_defense_middleware(request: Request, call_next):
             )
 
     response = await call_next(request)
-    
+
     # Ensure CORS headers are attached to every standard response too
     response.headers["Access-Control-Allow-Origin"] = origin
     response.headers["Access-Control-Allow-Credentials"] = "true"
     response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS, PATCH"
-    response.headers["Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-Requested-With, Accept, Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
-    
+    response.headers[
+        "Access-Control-Allow-Headers"] = "Authorization, Content-Type, X-Requested-With, Accept, Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+
     return response
+
 
 # ── ROUTER MAPPING ──────────────────────────────────────────────────────────
 app.include_router(api_router, prefix=settings.API_V1_STR)
@@ -187,6 +202,7 @@ async def _authenticate_ws(websocket: WebSocket) -> bool:
 
     return True
 
+
 async def _send_recent_threats(websocket: WebSocket, limit: int = 25) -> None:
     db = SessionLocal()
     try:
@@ -199,7 +215,7 @@ async def _send_recent_threats(websocket: WebSocket, limit: int = 25) -> None:
                        soar_action, is_apt_chain, reasons, mitre_tactic
                 FROM siem_threat_events
                 ORDER BY timestamp DESC
-                LIMIT :limit
+                    LIMIT :limit
                 """
             ),
             {"limit": limit},
@@ -265,7 +281,8 @@ def _map_pubsub_event(channel: str, raw_payload: Any) -> dict:
     if channel == "soar:ip_block_events" or lowered in {"alert", "threat_intercept", "soar_block_event"}:
         mapped_channel = "threats"
         severity = "critical"
-    elif lowered in {"command_issued", "agent_connect", "agent_disconnect", "global_inoculation_event", "defense_action"}:
+    elif lowered in {"command_issued", "agent_connect", "agent_disconnect", "global_inoculation_event",
+                     "defense_action"}:
         mapped_channel = "ops_execution" if lowered.startswith("command") or lowered.startswith("agent") else "defense"
         severity = data.get("severity") if isinstance(data, dict) and data.get("severity") else "medium"
     else:
@@ -273,11 +290,13 @@ def _map_pubsub_event(channel: str, raw_payload: Any) -> dict:
         severity = data.get("severity") if isinstance(data, dict) and data.get("severity") else "low"
 
     return {
-        "id": data.get("id") if isinstance(data, dict) and data.get("id") else f"{event_type}-{datetime.utcnow().timestamp()}",
+        "id": data.get("id") if isinstance(data, dict) and data.get(
+            "id") else f"{event_type}-{datetime.utcnow().timestamp()}",
         "event_type": event_type,
         "channel": mapped_channel,
         "severity": severity,
-        "timestamp": data.get("timestamp") if isinstance(data, dict) and data.get("timestamp") else datetime.utcnow().isoformat(),
+        "timestamp": data.get("timestamp") if isinstance(data, dict) and data.get(
+            "timestamp") else datetime.utcnow().isoformat(),
         "payload": data,
     }
 
@@ -324,6 +343,7 @@ async def websocket_telemetry_bridge(websocket: WebSocket):
             await pubsub.close()
         except Exception:
             pass
+
 
 @app.websocket("/api/v1/ws/terminal")
 async def websocket_terminal(websocket: WebSocket):
@@ -706,61 +726,17 @@ SOVEREIGN COMMAND CONSOLE — Available Commands:\r
         log.info(f"[TERMINAL] Console session closed: user={user_sub}")
 
 
-@app.get("/health")
-async def health():
-    return {"status": "active", "timestamp": datetime.utcnow()}
-
-# ── CORS POLICY — Proxy-First Architecture ──────────────────────────────────
-# The frontend Next.js proxy handles all browser → backend calls.
-# Direct browser access only happens in local dev (not Docker).
-
-    """
-    Active browser terminal gateway. Validates the browser session before accepting
-    interactive control connections.
-
-    ASGI CONTRACT: websocket.accept() MUST be called before websocket.close().
-    Calling close() on an unaccepted WebSocket causes an AssertionError in uvicorn
-    that the browser receives as an abrupt drop, triggering the infinite reconnect loop.
-    """
-    token = websocket.query_params.get("token")
-    if not token:
-        authorization = websocket.headers.get("authorization", "")
-        if authorization.startswith("Bearer "):
-            token = authorization.removeprefix("Bearer ").strip()
-
-    if not token:
-        token = websocket.cookies.get("access_token")
-
-    if not token:
-        # Must accept before close — ASGI protocol requirement.
-        await websocket.accept()
-        await websocket.send_text(
-            json.dumps({"type": "SYSTEM_DISCONNECT", "reason": "Authentication required", "code": 4003})
-        )
-        await websocket.close(code=4003)
-        return
-
-    payload = verify_token(token)
-    if not payload or not payload.get("sub"):
-        await websocket.accept()
-        await websocket.send_text(
-            json.dumps({"type": "SYSTEM_DISCONNECT", "reason": "Invalid or expired token", "code": 4003})
-        )
-        await websocket.close(code=4003)
-        return
-
-    # Token valid — accept and notify
-    await websocket.accept()
-    log.info("Nexus Command Console connection established.")
-    await websocket.send_text(
-        json.dumps({"type": "SYSTEM_CONNECTED", "message": "[SYSTEM] Connected to ProjectXY Control Core."})
-    )
-    await websocket.close()
+# Note: the duplicate dead /health route + ~45 lines of unreachable orphaned
+# websocket-auth code that used to sit here (leftover from a botched refactor,
+# referencing an undefined 'websocket' name — harmless since it followed a
+# return statement and never executed) has been removed. The real /health
+# route is immediately below.
 
 @app.get("/health")
 async def health():
     return {"status": "active", "timestamp": datetime.utcnow()}
 
-# ── CORS POLICY — Proxy-First Architecture ──────────────────────────────────
-# The frontend Next.js proxy handles all browser → backend calls.
-# Direct browser access only happens in local dev (not Docker).
+# CORS is implemented via sovereign_defense_middleware, defined near the top
+# of this file — it validates the request Origin against allowed_origins
+# (which includes settings.BACKEND_CORS_ORIGINS from .env.local) rather than
+# reflecting any origin unconditionally.

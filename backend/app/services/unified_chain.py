@@ -2,7 +2,7 @@ import asyncio
 import logging
 from uuid import uuid4
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from fastapi import BackgroundTasks
 
 from app.schemas.mission import Mission, MissionPhase, Dossier, EnrichmentResult, DemaskingResult
@@ -27,7 +27,24 @@ class UnifiedIntelligenceChain:
         # In-memory mission store for MVP caching. In production, this syncs with Redis.
         self.active_missions: Dict[str, Mission] = {}
 
-    def initiate_mission(self, target: str, tenant_id: str, background_tasks: BackgroundTasks) -> Mission:
+    def initiate_mission(
+        self,
+        target: str,
+        tenant_id: str,
+        background_tasks: BackgroundTasks,
+        # FIXED: mission_router.py's launch_unified_mission() has always called this
+        # with mode= and priority= keyword arguments (they come straight from the
+        # frontend's MissionLaunchRequest) -- this method just never accepted them,
+        # so every single POST /missions/launch raised a TypeError and 500'd before
+        # a mission was ever actually created.
+        mode: str = "full",
+        priority: str = "MEDIUM",
+        # ADDED: see the matching note on Mission.objective/techniques in
+        # schemas/mission.py -- the frontend already sends these, they just
+        # had nowhere to land.
+        objective: Optional[str] = None,
+        techniques: Optional[list] = None,
+    ) -> Mission:
         """
         Launches the Intelligence Chain against a target. Returns immediately.
         """
@@ -36,16 +53,76 @@ class UnifiedIntelligenceChain:
             mission_id=mission_id,
             tenant_id=tenant_id,
             target_entity=target,
-            phase=MissionPhase.RECON
+            phase=MissionPhase.RECON,
+            mode=mode,
+            priority=priority,
+            objective=objective,
+            techniques=techniques or [],
         )
         
         self.active_missions[mission_id] = mission
-        logger.info(f"[{mission_id}] Mission Initiated against {target}")
+        logger.info(f"[{mission_id}] Mission Initiated against {target} (mode={mode}, priority={priority})")
         
         # Dispatch the pipeline to the background
         background_tasks.add_task(self._process_mission_lifecycle, mission_id)
         
         return mission
+
+    async def abort_mission(self, mission_id: str) -> None:
+        """
+        ADDED: mission_router.py's DELETE /missions/{id} has always called this,
+        but it never existed on this class -- every abort attempt raised an
+        AttributeError and 500'd.
+
+        This is a COOPERATIVE abort: FastAPI's BackgroundTasks doesn't hand back
+        a cancellable asyncio.Task, so there's no way to forcibly interrupt a
+        phase already in flight. Instead, _process_mission_lifecycle checks
+        mission.phase before starting each phase and stops early if it sees
+        ABORTED here -- so a mission is genuinely halted before its next phase,
+        even though the phase already running when abort was called will still
+        finish that one step first.
+        """
+        mission = self.active_missions.get(mission_id)
+        if not mission:
+            raise ValueError(f"Mission {mission_id} not found")
+        if mission.phase in {MissionPhase.COMPLETED, MissionPhase.FAILED, MissionPhase.ABORTED}:
+            raise ValueError(f"Mission {mission_id} is already in a terminal state: {mission.phase}")
+
+        mission.phase = MissionPhase.ABORTED
+        mission.updated_at = datetime.utcnow()
+        mission.execution_history.append({
+            "timestamp": datetime.utcnow().isoformat(),
+            "action": "ABORT",
+            "status": "SUCCESS",
+            "details": {"reason": "Operator-initiated abort"},
+        })
+        logger.warning(f"[{mission_id}] Mission aborted by operator.")
+
+    async def escalate_mission(self, mission_id: str, new_priority: str, reason: str, operator: str) -> None:
+        """
+        ADDED: mission_router.py's POST /missions/{id}/escalate has always
+        called this, but it never existed on this class either -- same
+        AttributeError/500 as abort_mission above.
+        """
+        mission = self.active_missions.get(mission_id)
+        if not mission:
+            raise ValueError(f"Mission {mission_id} not found")
+
+        old_priority = mission.priority
+        mission.priority = new_priority
+        mission.updated_at = datetime.utcnow()
+        mission.execution_history.append({
+            "timestamp": datetime.utcnow().isoformat(),
+            "action": "ESCALATE",
+            "status": "SUCCESS",
+            "details": {
+                "old_priority": old_priority,
+                "new_priority": new_priority,
+                "reason": reason,
+                "operator": operator,
+            },
+        })
+        logger.warning(f"[{mission_id}] Escalated {old_priority} -> {new_priority} by {operator}: {reason}")
 
     async def _process_mission_lifecycle(self, mission_id: str):
         """
@@ -58,12 +135,19 @@ class UnifiedIntelligenceChain:
         try:
             # PHASE I: RECON (The Probe)
             await self._phase_recon(mission)
+            # ADDED: cooperative abort check -- see abort_mission()'s docstring above.
+            if mission.phase == MissionPhase.ABORTED:
+                return
             
             # PHASE II: ANALYZE (The Brain)
             await self._phase_analyze(mission)
+            if mission.phase == MissionPhase.ABORTED:
+                return
             
             # PHASE III: EXECUTE (The Action)
             await self._phase_execute(mission)
+            if mission.phase == MissionPhase.ABORTED:
+                return
             
             # PHASE IV: PERSIST (The Watch)
             await self._phase_persist(mission)

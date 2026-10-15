@@ -21,6 +21,8 @@ from app.api.v1.endpoints import node_socket
 from app.api.v1.endpoints import graph_topology
 from app.modules.siem.siem_endpoints import router as siem_router
 from app.api.v1.endpoints import config as config_endpoints
+from app.routers import sensor_router, organization_router
+from app.modules.misc.endpoints.devices import organizations_router
 
 api_router = APIRouter()
 
@@ -65,6 +67,17 @@ api_router.include_router(connectors.router, prefix="/connectors", tags=["Global
 api_router.include_router(audit.router, prefix="/audit", tags=["Cryptographic Ledger"])
 api_router.include_router(node_socket.router, prefix="/nodes", tags=["Execution Nodes"])
 api_router.include_router(graph_topology.router, prefix="/intel", tags=["Threat Graph Intelligence"])
+
+# ── Sensor agent + Organizations (human CRUD lives in devices.py's
+#    organizations_router; sensor_router/organization_router are the agents'
+#    own enroll/heartbeat/command-result endpoints) ─────────────────────────
+api_router.include_router(sensor_router.router, tags=["Sensor Agent"])
+api_router.include_router(organization_router.router, tags=["Organization Agent"])
+api_router.include_router(organizations_router, prefix="/organizations", tags=["Organizations"])
+# Note: sensor_router.py declares prefix="/sensor" and organization_router.py
+# declares prefix="/organization-agent" on their own APIRouters, so no extra
+# prefix= is added here for either (matching how mission_router.router is
+# included with no extra prefix, since it already declares its own).
 
 # ── Phase 4: SIEM / SOAR / DGA Intelligence ────────────────────────────────
 api_router.include_router(siem_router, prefix="/siem", tags=["SIEM — Behavioral Analysis"])

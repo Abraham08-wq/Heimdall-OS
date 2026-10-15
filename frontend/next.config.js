@@ -42,8 +42,19 @@ const nextConfig = {
         ];
     },
 
-    // Allow images from any source (for avatars, logos, threat intel icons)
+    // FIXED: CVE-2025-59471 — self-hosted Next.js apps with wildcard
+    // remotePatterns are vulnerable to memory-exhaustion DoS via /_next/image,
+    // since the optimizer loads external images fully into memory with no
+    // size cap. No 14.x patch exists (fixed only in 15.5.10+/16.1.5+, a major
+    // upgrade requiring its own migration). Since this platform legitimately
+    // needs to load images from arbitrary domains (threat-actor
+    // infrastructure, OSINT sources), a fixed allowlist isn't realistic here
+    // — so `unoptimized: true` disables the vulnerable resize/optimize
+    // pipeline entirely. Images still render via next/image, just served as
+    // originals rather than resized/re-encoded server-side. Revert this once
+    // you've done a deliberate Next.js 16.1.5+ upgrade.
     images: {
+        unoptimized: true,
         remotePatterns: [
             { protocol: "https", hostname: "**" },
             { protocol: "http", hostname: "**" },

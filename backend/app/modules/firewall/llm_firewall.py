@@ -92,6 +92,19 @@ FIREWALL_CONFIG = {
     ).replace("postgresql+asyncpg://", "postgresql://").replace("+asyncpg", ""),
     "redis_url": os.getenv("REDIS_URL", "redis://localhost:6379/0"),
     "kafka_bootstrap": os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092"),
+    # ADDED: this is the actual fix. SentenceTransformer(...) below downloads
+    # the embedding model from Hugging Face on first use if it isn't already
+    # cached in the container -- and neither this Dockerfile nor
+    # docker-compose.yml bakes the model in or persists the HF cache across
+    # container recreations. On a slow/unstable connection that download can
+    # take 20-30+ minutes with ZERO log output in between (this is exactly
+    # what was hanging backend startup: 23+ minutes of silence between "WORM
+    # Integrity Monitor: ONLINE" and "Cognitive Shield: ONLINE", with NET I/O
+    # climbing the whole time in `docker stats`). This bounds that wait so a
+    # slow download degrades the firewall (semantic-similarity checking off,
+    # which every call site already handles gracefully) instead of hanging
+    # the entire backend indefinitely.
+    "model_load_timeout_seconds": int(os.getenv("FW_MODEL_LOAD_TIMEOUT_SECONDS", "45")),
 }
 
 # ---------------------------------------------------------------------------
@@ -336,7 +349,11 @@ class LLMFirewall:
         """Factory — use this instead of __init__ in async contexts."""
         fw = cls()
         await fw._init_connections()
-        fw._load_ml_models()
+        # FIXED: was `fw._load_ml_models()` -- a synchronous call that blocked
+        # the entire startup (and the whole event loop) on SentenceTransformer's
+        # model download, with no timeout. See _load_ml_models()'s docstring
+        # and the model_load_timeout_seconds comment above for the full story.
+        await fw._load_ml_models()
         fw._ready = True
 
         # ── Layer 4: Wire Semantic Logger with DB pool and model ──────────
@@ -394,19 +411,92 @@ class LLMFirewall:
         except Exception as exc:
             logger.warning(f"[FIREWALL] Kafka unavailable: {exc}. Event streaming degraded.")
 
-    def _load_ml_models(self):
-        """Load SentenceTransformer and spaCy NER (blocks during startup only)."""
+    @staticmethod
+    def _blocking_load_sentence_transformer():
+        """Runs in a worker thread (see _load_ml_models). Never call directly
+        from the event loop -- SentenceTransformer's constructor can make a
+        real, unbounded network request (the Hugging Face Hub download) the
+        very first time this model name is used on a machine/container."""
+        from sentence_transformers import SentenceTransformer
+        return SentenceTransformer(FIREWALL_CONFIG["embedding_model"])
+
+    @staticmethod
+    def _blocking_load_spacy():
+        """Runs in a worker thread (see _load_ml_models). Normally fails fast
+        (ImportError) if spaCy isn't installed, or loads quickly from local
+        disk if it is -- bounded here too, for consistency and safety, in
+        case a future environment has spaCy installed but its model data
+        missing (which spaCy would try to fetch)."""
+        import spacy
+        return spacy.load("en_core_web_sm")
+
+    async def _load_ml_models(self):
+        """
+        Load SentenceTransformer and spaCy NER.
+
+        FIXED: this used to be a synchronous method (`def`, not `async def`)
+        called directly -- no `await`, no thread offload, no timeout -- from
+        an async factory. SentenceTransformer(model_name) downloads the model
+        from Hugging Face on first use if it isn't already cached locally,
+        and this project's Docker setup neither bakes the model into the
+        image nor persists the Hugging Face cache directory across container
+        recreations (no matching volume in docker-compose.yml). On a slow or
+        unstable connection, that download could take 20-30+ minutes with
+        zero log output in between, and because the old code never awaited or
+        bounded it, it blocked the entire FastAPI startup -- and the whole
+        event loop, since it wasn't even offloaded to a thread -- for that
+        entire duration. This is exactly what was observed: 23+ minutes of
+        silence between "WORM Integrity Monitor: ONLINE" and "Cognitive
+        Shield: ONLINE", with NET I/O steadily climbing in `docker stats`.
+
+        Now: each load runs in a worker thread (so it can't block the event
+        loop even while it's in progress) and is bounded by
+        FW_MODEL_LOAD_TIMEOUT_SECONDS (default 45s). If a load doesn't finish
+        in time, we log a clear warning and move on -- semantic-similarity
+        checking is disabled in that case, exactly like it already was
+        whenever the model failed to load for any other reason (every call
+        site already checks `if not self._model: ...` and degrades
+        gracefully). A slow download no longer holds up the rest of the
+        application starting.
+
+        Note this only bounds the WAIT, not the download itself: if it times
+        out, the download may still be happening in its background thread and
+        could complete later (or leave a partial file). For a lasting fix
+        beyond this timeout, add a volume in docker-compose.yml persisting
+        the Hugging Face cache (e.g. `~/.cache/huggingface`, or `/root/...`
+        since this service runs as root) so a successful download survives
+        container recreation and this download only ever happens once.
+        """
+        timeout = FIREWALL_CONFIG["model_load_timeout_seconds"]
+
         try:
-            from sentence_transformers import SentenceTransformer
-            self._model = SentenceTransformer(FIREWALL_CONFIG["embedding_model"])
+            self._model = await asyncio.wait_for(
+                asyncio.to_thread(self._blocking_load_sentence_transformer),
+                timeout=timeout,
+            )
             logger.info(f"[FIREWALL] Embedding model '{FIREWALL_CONFIG['embedding_model']}' loaded.")
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[FIREWALL] Embedding model load did not finish within "
+                f"{timeout}s (likely still downloading over a slow connection). "
+                f"Semantic similarity checking disabled for this run. Increase "
+                f"FW_MODEL_LOAD_TIMEOUT_SECONDS, or better, persist the Hugging "
+                f"Face cache in a Docker volume so this only downloads once."
+            )
         except Exception as exc:
             logger.warning(f"[FIREWALL] Embedding model unavailable: {exc}. Semantic check disabled.")
 
         try:
-            import spacy
-            self._spacy_nlp = spacy.load("en_core_web_sm")
+            self._spacy_nlp = await asyncio.wait_for(
+                asyncio.to_thread(self._blocking_load_spacy),
+                timeout=timeout,
+            )
             logger.info("[FIREWALL] spaCy NER (en_core_web_sm) loaded.")
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"[FIREWALL] spaCy load did not finish within {timeout}s. "
+                f"Falling back to regex PII."
+            )
         except Exception as exc:
             logger.warning(f"[FIREWALL] spaCy NER unavailable: {exc}. Falling back to regex PII.")
 

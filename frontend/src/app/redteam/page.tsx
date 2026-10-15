@@ -4,7 +4,12 @@ import { TeamShell } from '@/components/Layout/TeamShell';
 import { Crosshair, Target, Plus, Zap, Send, Clock } from 'lucide-react';
 import { apiRequest } from '@/lib/api';
 
-interface Mission { id?: string; target?: string; status?: string; phase?: string; risk?: string; created_at?: string; }
+interface Mission {
+  mission_id?: string;
+  target_entity?: string;
+  phase?: string;
+  created_at?: string;
+}
 interface MitreTechnique { id?: string; x_mitre_id?: string; name?: string; kill_chain_phases?: { phase_name: string }[]; description?: string; }
 
 function TechniqueChip({ t, onClick, selected }: { t: MitreTechnique; onClick: () => void; selected: boolean }) {
@@ -60,7 +65,7 @@ export default function RedTeamOps() {
         body: JSON.stringify({ target, objective, techniques: selectedTechs }),
       });
       setMissions(m => [res, ...m]);
-      setStatus(`✅ Mission launched: ${res.id ?? 'ID pending'}`);
+      setStatus(`✅ Mission launched: ${res.mission_id ?? 'ID pending'}`);
       setTarget(''); setObjective(''); setSelected([]);
     } catch (err: any) {
       setStatus(`⚠️  ${err?.message ?? 'Launch error — check backend'}`);
@@ -153,19 +158,23 @@ export default function RedTeamOps() {
             <table className="w-full">
               <thead>
                 <tr className="border-b border-red-900/30">
-                  {['ID', 'TARGET', 'PHASE', 'STATUS', 'RISK', 'TIME'].map(h => (
+                  {/* FIXED: STATUS and RISK columns removed -- the backend Mission
+                      object has no such fields, so these always rendered a fixed
+                      fake fallback ("PENDING" / "MEDIUM") regardless of the
+                      mission's real state. PHASE already reflects genuine
+                      backend state (RECON/ANALYZE/EXECUTE/PERSIST/COMPLETED/
+                      FAILED/ABORTED), so it now does the job STATUS was for. */}
+                  {['ID', 'TARGET', 'PHASE', 'TIME'].map(h => (
                     <th key={h} className="px-4 py-2 text-left text-[8px] font-black tracking-widest text-red-800">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-red-900/10">
                 {missions.map((m, i) => (
-                  <tr key={m.id ?? i} className="hover:bg-red-950/10">
-                    <td className="px-4 py-2 text-[10px] font-mono text-red-500">{(m.id ?? '—').slice(0, 8)}</td>
-                    <td className="px-4 py-2 text-[10px] font-mono text-red-300">{m.target}</td>
+                  <tr key={m.mission_id ?? i} className="hover:bg-red-950/10">
+                    <td className="px-4 py-2 text-[10px] font-mono text-red-500">{(m.mission_id ?? '—').slice(0, 8)}</td>
+                    <td className="px-4 py-2 text-[10px] font-mono text-red-300">{m.target_entity}</td>
                     <td className="px-4 py-2 text-[9px] font-mono text-red-600">{m.phase ?? 'INITIAL'}</td>
-                    <td className="px-4 py-2"><span className="text-[9px] font-black tracking-widest text-yellow-500">{m.status ?? 'PENDING'}</span></td>
-                    <td className="px-4 py-2 text-[10px] font-mono text-red-400">{m.risk ?? 'MEDIUM'}</td>
                     <td className="px-4 py-2 text-[9px] font-mono text-slate-600 flex items-center gap-1"><Clock size={9}/>{m.created_at ? new Date(m.created_at).toLocaleTimeString() : 'NOW'}</td>
                   </tr>
                 ))}

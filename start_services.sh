@@ -1,48 +1,55 @@
-#!/bin/bash
-# Start Services & Live Log Stream
-
+#!/usr/bin/env bash
+# Picks a profile and starts ProjectXY.
+#
+# - If PROJECTXY_COMPOSE_FILE is set, uses that file directly (README:
+#   `PROJECTXY_COMPOSE_FILE=docker-compose.yml ./start_services.sh` forces
+#   the full/heavy profile regardless of detected RAM).
+# - Otherwise auto-detects total system RAM: below ~6 GiB -> lite profile,
+#   at or above -> full profile. Warns (but still proceeds) if forced onto
+#   the full profile on a low-RAM host.
 set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")"
 
-echo "🚀 Starting all ProjectXY services..."
-TOTAL_MEM_KB="$(awk '/MemTotal/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
-DEFAULT_COMPOSE_FILE="docker-compose.lite.yml"
-if [[ "${TOTAL_MEM_KB}" -ge 6291456 ]]; then
-	DEFAULT_COMPOSE_FILE="docker-compose.yml"
-fi
-COMPOSE_FILE="${PROJECTXY_COMPOSE_FILE:-${DEFAULT_COMPOSE_FILE}}"
-ENV_FILE="${PROJECTXY_ENV_FILE:-.env.local}"
-echo "Using compose file: ${COMPOSE_FILE}"
-echo "Using env file: ${ENV_FILE}"
-if [[ "${COMPOSE_FILE}" == "docker-compose.yml" && "${TOTAL_MEM_KB}" -lt 6291456 ]]; then
-	echo "Warning: detected less than 6 GB RAM; full stack may freeze this machine."
-fi
+LITE_THRESHOLD_MB=6144
 
-if [[ ! -f "${ENV_FILE}" ]]; then
-	echo "Environment file ${ENV_FILE} not found. Create it before startup."
-	exit 1
-fi
+detect_total_ram_mb() {
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    # macOS: hw.memsize is in bytes
+    echo $(( $(sysctl -n hw.memsize) / 1024 / 1024 ))
+  elif [ -r /proc/meminfo ]; then
+    awk '/MemTotal/ { printf "%d", $2/1024 }' /proc/meminfo
+  else
+    echo "0"   # unknown; caller decides what to do with 0
+  fi
+}
 
-if ! docker info >/dev/null 2>&1; then
-	echo "Docker daemon is not running or not reachable. Start Docker Desktop / dockerd and retry."
-	exit 1
-fi
-
-# For the lightweight profile, clear stale service containers before recreate.
-if [[ "${COMPOSE_FILE}" == "docker-compose.lite.yml" ]]; then
-	docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" rm -fsv >/dev/null 2>&1 || true
+if [ -n "${PROJECTXY_COMPOSE_FILE:-}" ]; then
+  ram_mb="$(detect_total_ram_mb)"
+  if [ "$ram_mb" -gt 0 ] && [ "$ram_mb" -lt "$LITE_THRESHOLD_MB" ] && [ "$PROJECTXY_COMPOSE_FILE" = "docker-compose.yml" ]; then
+    echo "[start_services] WARNING: PROJECTXY_COMPOSE_FILE=docker-compose.yml (full profile) forced," >&2
+    echo "[start_services] but this host only reports ${ram_mb} MiB RAM (threshold: ${LITE_THRESHOLD_MB} MiB)." >&2
+    echo "[start_services] Proceeding anyway since you set it explicitly — expect heavy services to be slow" >&2
+    echo "[start_services] or to be OOM-killed. Ctrl+C now to abort, or wait 5s to continue." >&2
+    sleep 5
+  fi
+  echo "[start_services] PROJECTXY_COMPOSE_FILE=${PROJECTXY_COMPOSE_FILE} set explicitly — using it."
+  exec docker compose --env-file .env.local -f "${PROJECTXY_COMPOSE_FILE}" up -d
 fi
 
-# 1. Build and start containers in detached mode
-# --build: Forces a build of the images from Dockerfiles
-# --force-recreate: Ensures containers are recreated, which is good after a reset
-docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" up -d --build --force-recreate --wait
+ram_mb="$(detect_total_ram_mb)"
 
-echo "✅ Services started."
-if [[ "${PROJECTXY_FOLLOW_LOGS:-true}" == "true" ]]; then
-	echo "📡 Implementing Live Streaming Log System..."
-	echo "Piping the 'AI Thinking Process' and all service logs directly to the terminal."
-	echo "Press Ctrl+C to exit the log stream (the services will continue to run in the background)."
+if [ "$ram_mb" -eq 0 ]; then
+  echo "[start_services] Could not detect total RAM on this platform — defaulting to lite profile."
+  echo "[start_services] Override with: PROJECTXY_COMPOSE_FILE=docker-compose.yml ./start_services.sh"
+  exec ./start_lite_services.sh
+fi
 
-	# 2. Follow the logs of all services
-	docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" logs -f
+echo "[start_services] Detected ${ram_mb} MiB total RAM (lite threshold: ${LITE_THRESHOLD_MB} MiB)."
+
+if [ "$ram_mb" -lt "$LITE_THRESHOLD_MB" ]; then
+  echo "[start_services] Below threshold — starting lite profile."
+  exec ./start_lite_services.sh
+else
+  echo "[start_services] Above threshold — starting full profile."
+  exec ./start_full_services.sh
 fi

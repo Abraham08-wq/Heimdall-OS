@@ -6,23 +6,42 @@ import uuid
 
 Base = declarative_base()
 
+
 class Tenant(Base):
     __tablename__ = "tenants"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String, index=True, unique=True)
     domain = Column(String, unique=True, index=True)
-    subscription_tier = Column(String, default="starter") # starter, professional, enterprise
+    subscription_tier = Column(String, default="starter")  # starter, professional, enterprise
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # These fields complete Tenant for the sensor-agent monitoring use case
+    # (tracking that a legal agreement is actually in place before an agent
+    # gets enrolled for a given tenant).
+    contact_name = Column(String, nullable=True)
+    contact_email = Column(String, nullable=True)
+    legal_agreement_signed_at = Column(DateTime(timezone=True), nullable=True)
+    legal_agreement_reference = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
 
     # Add back_populates after defining User
     users = relationship("User", back_populates="tenant")
     nodes = relationship("ExecutionNode", back_populates="tenant")
+    # Reverse side of Device.tenant.
+    devices = relationship("Device", back_populates="tenant")
+    # ADDED: reverse side of Organization.tenant, defined below. A Tenant
+    # protects both standalone Devices AND Organizations directly -- these
+    # are two parallel, independent asset types under the same Tenant, not
+    # nested inside one another.
+    organizations = relationship("Organization", back_populates="tenant")
+
 
 class User(Base):
     __tablename__ = "users"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), index=True, nullable=True) # Added for multi-tenancy
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), index=True,
+                       nullable=True)  # Added for multi-tenancy
     email = Column(String, unique=True, index=True)
     hashed_password = Column(String)
     full_name = Column(String)
@@ -32,14 +51,16 @@ class User(Base):
 
     tenant = relationship("Tenant", back_populates="users")
 
+
 class Subscription(Base):
     __tablename__ = "subscriptions"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), unique=True)
     stripe_customer_id = Column(String, index=True)
     stripe_subscription_id = Column(String, index=True)
-    status = Column(String) # active, past_due, canceled
+    status = Column(String)  # active, past_due, canceled
     current_period_end = Column(DateTime(timezone=True))
+
 
 class ExecutionNode(Base):
     __tablename__ = "execution_nodes"
@@ -53,74 +74,85 @@ class ExecutionNode(Base):
 
     tenant = relationship("Tenant", back_populates="nodes")
 
+
 class EntityDB(Base):
     __tablename__ = "entities"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), index=True, nullable=True) # Added for multi-tenancy
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), index=True,
+                       nullable=True)  # Added for multi-tenancy
     canonical_name = Column(String, index=True)
     type = Column(String, index=True)  # Added index
     risk_score = Column(Integer, default=0, index=True)  # Added index
     created_at = Column(DateTime(timezone=True), server_default=func.now(), index=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    
+
     attributes = relationship("AttributeDB", back_populates="entity")
+
 
 class AttributeDB(Base):
     __tablename__ = "attributes"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    entity_id = Column(UUID(as_uuid=True), ForeignKey("entities.id"), index=True) # Added index
-    type = Column(String, index=True) # Added index
-    value = Column(Text) # App-layer encryption recommended
+    entity_id = Column(UUID(as_uuid=True), ForeignKey("entities.id"), index=True)  # Added index
+    type = Column(String, index=True)  # Added index
+    value = Column(Text)  # App-layer encryption recommended
     value_hash = Column(String, index=True)
-    source = Column(String, index=True) # Added index
+    source = Column(String, index=True)  # Added index
     confidence = Column(Float)
     last_seen = Column(DateTime(timezone=True), server_default=func.now(), index=True)
-    
+
     entity = relationship("EntityDB", back_populates="attributes")
+
 
 class AuditLog(Base):
     __tablename__ = "audit_logs"
     # TimescaleDB requires the partition column (timestamp) to be part of the primary key
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     timestamp = Column(DateTime(timezone=True), primary_key=True, server_default=func.now(), index=True)
-    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), index=True, nullable=True) # Added for partitioning
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), index=True,
+                       nullable=True)  # Added for partitioning
     actor_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), index=True)
-    action = Column(String, index=True) 
+    action = Column(String, index=True)
     resource_type = Column(String)
-    resource_id = Column(UUID(as_uuid=True), index=True) 
+    resource_id = Column(UUID(as_uuid=True), index=True)
     metadata_ = Column("metadata", JSONB)
-    
+
     # WORM / Immutable Ledger Fields
-    hash = Column(String, index=True) # SHA-256(prev_hash + actor + action + timestamp)
+    hash = Column(String, index=True)  # SHA-256(prev_hash + actor + action + timestamp)
     previous_hash = Column(String, index=True)
-    signature = Column(String) # Digital signature (e.g., Ed25519) for non-repudiation
+    signature = Column(String)  # Digital signature (e.g., Ed25519) for non-repudiation
+
 
 class Device(Base):
     __tablename__ = "devices"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), index=True, nullable=True)
     owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+    # RE-ADDED: a Device may optionally belong to an Organization (grouping),
+    # while still belonging directly to a Tenant either way. Nullable --
+    # a standalone device under a Tenant has this as None.
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="SET NULL"),
+                             index=True, nullable=True)
 
     # Core identification
-    name = Column(String, index=True)           # friendly display name (legacy field)
-    hostname = Column(String, index=True)        # FQDN or short hostname
-    ip = Column(String, index=True)              # primary IPv4/IPv6
+    name = Column(String, index=True)  # friendly display name (legacy field)
+    hostname = Column(String, index=True)  # FQDN or short hostname
+    ip = Column(String, index=True)  # primary IPv4/IPv6
     mac = Column(String, index=True, nullable=True)
 
     # Categorisation
-    type = Column(String, index=True)            # Server | Workstation | Network | IoT | Mobile | OT/ICS | Cloud
-    os = Column(String, nullable=True)           # OS name + version e.g. "Ubuntu 22.04 LTS"
+    type = Column(String, index=True)  # Server | Workstation | Network | IoT | Mobile | OT/ICS | Cloud
+    os = Column(String, nullable=True)  # OS name + version e.g. "Ubuntu 22.04 LTS"
     department = Column(String, nullable=True)
-    tags = Column(JSONB, nullable=True)          # ["finance", "critical"]
+    tags = Column(JSONB, nullable=True)  # ["finance", "critical"]
 
     # Posture / risk
     risk_score = Column(Integer, default=0, index=True)
     status = Column(String, default="online", index=True)  # online | offline | quarantined
 
     # Discovery data (stored as JSONB for flexibility)
-    ports = Column(JSONB, nullable=True)          # [22, 80, 443]
-    services = Column(JSONB, nullable=True)       # ["sshd 8.9", "nginx 1.23"]
-    cves = Column(JSONB, nullable=True)           # ["CVE-2023-38408"]
+    ports = Column(JSONB, nullable=True)  # [22, 80, 443]
+    services = Column(JSONB, nullable=True)  # ["sshd 8.9", "nginx 1.23"]
+    cves = Column(JSONB, nullable=True)  # ["CVE-2023-38408"]
 
     # Geo (kept for compatibility with geofence / OmniProbe)
     latitude = Column(Float, nullable=True)
@@ -134,6 +166,97 @@ class Device(Base):
     # Relationship to Geofences
     geofences = relationship("Geofence", back_populates="device")
 
+    # ── Sensor agent fields ────────────────────────────────────────────────
+    # A Device belongs directly to a Tenant, and MAY optionally also belong
+    # to an Organization for grouping (organization_id is nullable -- a
+    # standalone device under a Tenant simply leaves it unset).
+    tenant = relationship("Tenant", back_populates="devices")
+    organization = relationship("Organization", back_populates="devices")
+
+    agent_secret_hash = Column(String, nullable=True)
+    agent_enrolled_at = Column(DateTime(timezone=True), nullable=True)
+    last_heartbeat = Column(DateTime(timezone=True), nullable=True)
+    deployment_mode = Column(String, nullable=False, default="endpoint")  # "endpoint" | "gateway"
+
+    # Mobile push notifications (added for the mobile sensor agent)
+    push_token = Column(String, nullable=True)
+    push_platform = Column(String, nullable=True)  # "ios" | "android"
+
+    commands = relationship("DeviceCommand", back_populates="device", cascade="all, delete-orphan")
+
+
+class DeviceCommand(Base):
+    __tablename__ = "device_commands"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    device_id = Column(UUID(as_uuid=True), ForeignKey("devices.id", ondelete="CASCADE"), nullable=False)
+    action = Column(String, nullable=False)
+    params = Column(JSONB, nullable=True)
+    status = Column(String, nullable=False, default="pending")  # pending | delivered | completed | failed
+    issued_by = Column(UUID(as_uuid=True), nullable=True)
+    result = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    device = relationship("Device", back_populates="commands")
+
+
+class Organization(Base):
+    """
+    A protected company/network, monitored via an agent installed at the
+    server/network level -- as opposed to Device, whose agent is installed
+    on a single endpoint. Organization belongs directly to a Tenant
+    (standalone), the same way Device does; the two are parallel asset
+    types under a Tenant, not nested inside each other.
+    """
+    __tablename__ = "organizations"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), index=True, nullable=True)
+    owner_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
+
+    # Core identification
+    name = Column(String, index=True)
+    domain = Column(String, index=True, nullable=True)
+    industry = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+
+    # Posture / risk -- same vocabulary as Device, so dashboards/heatmaps can
+    # treat both asset types uniformly.
+    risk_score = Column(Integer, default=0, index=True)
+    status = Column(String, default="online", index=True)  # online | offline | quarantined
+
+    # ── Sensor agent fields -- server/network-level install. Mirrors
+    # Device's agent fields, but represents ONE agent protecting the whole
+    # organization's server/network rather than a single endpoint.
+    agent_secret_hash = Column(String, nullable=True)
+    agent_enrolled_at = Column(DateTime(timezone=True), nullable=True)
+    last_heartbeat = Column(DateTime(timezone=True), nullable=True)
+    deployment_mode = Column(String, nullable=False, default="gateway")  # organizations default to gateway-style install
+
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    tenant = relationship("Tenant", back_populates="organizations")
+    devices = relationship("Device", back_populates="organization")
+    commands = relationship("OrganizationCommand", back_populates="organization", cascade="all, delete-orphan")
+
+
+class OrganizationCommand(Base):
+    __tablename__ = "organization_commands"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(UUID(as_uuid=True), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False)
+    action = Column(String, nullable=False)
+    params = Column(JSONB, nullable=True)
+    status = Column(String, nullable=False, default="pending")  # pending | delivered | completed | failed
+    issued_by = Column(UUID(as_uuid=True), nullable=True)
+    result = Column(JSONB, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+    completed_at = Column(DateTime(timezone=True), nullable=True)
+
+    organization = relationship("Organization", back_populates="commands")
+
 
 class Geofence(Base):
     __tablename__ = "geofences"
@@ -144,8 +267,9 @@ class Geofence(Base):
     radius_meters = Column(Float, default=1000.0)
     active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    
+
     device = relationship("Device", back_populates="geofences")
+
 
 class IntelligenceReport(Base):
     __tablename__ = "intelligence_reports"
@@ -155,15 +279,17 @@ class IntelligenceReport(Base):
     data = Column(JSONB)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+
 class Loot(Base):
     __tablename__ = "loot"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     tenant_id = Column(UUID(as_uuid=True), ForeignKey("tenants.id"), index=True, nullable=True)
     operator_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), index=True, nullable=True)
-    source = Column(String, index=True, nullable=True) # E.g., IP address, hostname, or API hook
-    loot_type = Column(String, index=True) # e.g., 'AWS_KEY', 'PASSWORD', 'PRIVATE_KEY'
+    source = Column(String, index=True, nullable=True)  # E.g., IP address, hostname, or API hook
+    loot_type = Column(String, index=True)  # e.g., 'AWS_KEY', 'PASSWORD', 'PRIVATE_KEY'
     content = Column(Text, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+
 
 # TimescaleDB Hypertable DDL Triggers
 from sqlalchemy import event

@@ -1,5 +1,5 @@
 # Stage 1: Builder
-FROM python:3.10-slim AS builder
+FROM public.ecr.aws/docker/library/python:3.10-slim AS builder
 
 WORKDIR /app
 
@@ -18,7 +18,7 @@ RUN pip wheel --index-url=https://pypi.org/simple \
     --no-cache-dir --wheel-dir /app/wheels -r requirements.txt
 
 # Stage 2: Runtime
-FROM python:3.10-slim
+FROM public.ecr.aws/docker/library/python:3.10-slim
 
 WORKDIR /app
 
